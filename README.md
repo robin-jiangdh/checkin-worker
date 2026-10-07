@@ -9,7 +9,7 @@
 |---|---|---|
 | `newapi.py` 协议签到 | ✅ 完整移植 `src/newapi.ts` | probe / 密码登录 / access_token / session / JWT refresh / endpoint & login_bonus 两种签到 / bootstrap 设密码 |
 | 内置调度器 | ✅ Cron Triggers `src/scheduler.ts` | 每 15 分钟 sweep，按账号 `checkin_after` 窗口 + 当天是否已成功决定跑谁 |
-| SQLite 账号库 | ✅ KV（`src/store.ts`） | 原设计是 D1（`migrations/0001_accounts.sql` 留档），但现有 Cloudflare API token 无 D1 权限，改用 KV：`acct:{id}` 存账号行、`acct:index` 存 id 列表、`site:{b64}` 24h 缓存站点探测；`password`/`access_token`/`session` 三列 AES-GCM 加密落盘 |
+| SQLite 账号库 | ✅ D1 `src/store.ts`（`migrations/0001_accounts.sql`） | 表结构同源，另加 `site_info` 表缓存站点探测（24h TTL）；`password`/`access_token`/`session` 三列 AES-GCM 加密落盘 |
 | 站点探测缓存 | ✅ `site_info` 表 24h TTL | 每天 sweep 不用对每个账号重复 probe |
 | 账号 CRUD / 手动签到 / 批量签到 / probe / bootstrap | ✅ `src/index.ts` Hono 路由 | 路由形状与原版 `/api/*` 一致；返回账号时凭据只给 `has_password` 这类存在标记，不再明文返回 |
 | 浏览器登录 / IdP 会话注入 / profile 管理 | ❌ 砍掉 | Workers 上没有持久化浏览器；`login_method=linuxdo|github`、`mechanism=visit` 会 422 拒绝 |
@@ -22,20 +22,23 @@
 cd checkin-worker
 npm install
 
-# 1. KV namespace（已建好：checkin_kv，id 见 wrangler.toml）
-# 如需新建：npx wrangler kv namespace create checkin_kv
+# 1. 建 D1（已建好：checkin_db，id 见 wrangler.toml）
+# 如需新建：npx wrangler d1 create checkin_db
 
-# 2. 设 secret
+# 2. 跑迁移
+npm run db:migrate:local   # 本地验证
+npm run db:migrate:remote  # 线上
+
+# 3. 设 secret
 openssl rand -base64 32 | npx wrangler secret put ENCRYPTION_KEY
 openssl rand -hex 24 | npx wrangler secret put ADMIN_TOKEN
 
-# 3. 发布（wrangler 一步到位：脚本 + KV 绑定 + cron）
+# 4. 发布（wrangler 一步到位：脚本 + D1 绑定 + cron）
 npm run deploy
-# 或纯 API 部署（token 无 D1 权限时用此路，见 deploy/cf_deploy_checkin.py）：
+# 或纯 API 部署（见 deploy/cf_deploy_checkin.py，schedules 的 PUT body 是裸数组）：
 # npx esbuild src/index.ts --bundle --format=esm --platform=browser --outfile=dist/worker.js
 # ENCRYPTION_KEY=... ADMIN_TOKEN=... python3 deploy/cf_deploy_checkin.py \
-#   --account <id> --script checkin-worker --worker dist/worker.js \
-#   --kv-namespace <id>
+#   --account <id> --script checkin-worker --worker dist/worker.js --d1-id <uuid>
 ```
 
 `ENCRYPTION_KEY` 丢了 = 所有存量凭据解不开，只能删账号重建。请把它和数据库备份分开保管。

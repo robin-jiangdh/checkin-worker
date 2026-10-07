@@ -10,7 +10,7 @@ Reads secrets from env (never prints them):
 Usage:
   ENCRYPTION_KEY=... ADMIN_TOKEN=... python3 deploy/cf_deploy_checkin.py \
       --account <id> --script checkin-worker --worker dist/worker.js \
-      --kv-namespace <id> --tz Asia/Shanghai --cron '*/15 * * * *'
+      --d1-id <database-uuid> --tz Asia/Shanghai --cron '*/15 * * * *'
 """
 import json
 import sys
@@ -55,7 +55,7 @@ def main(argv):
             i += 2
         else:
             i += 1
-    for k in ("account", "script", "worker", "kv_namespace"):
+    for k in ("account", "script", "worker", "d1_id"):
         if k not in args:
             raise SystemExit(f"missing --{k.replace('_', '-')}")
     enc_key = os.environ.get("ENCRYPTION_KEY")
@@ -74,7 +74,7 @@ def main(argv):
         "main_module": "worker.js",
         "compatibility_date": "2025-09-01",
         "bindings": [
-            {"type": "kv_namespace", "name": "KV", "namespace_id": args["kv_namespace"]},
+            {"type": "d1", "name": "DB", "id": args["d1_id"]},
             {"type": "secret_text", "name": "ENCRYPTION_KEY", "text": enc_key},
             {"type": "secret_text", "name": "ADMIN_TOKEN", "text": admin_token},
             {"type": "plain_text", "name": "CHECKIN_TZ", "text": args["tz"]},

@@ -1,18 +1,8 @@
 /**
- * KV-backed account store. Mirrors panel/store.py's accounts table, minus
+ * D1-backed account store. Mirrors panel/store.py's accounts table, minus
  * promo_state (desktop UI concern) and plus encrypted secret columns.
  *
- * NOTE: D1 was the original design, but Robin's stored Cloudflare API token
- * has no D1 scope (Workers + KV only), so storage is KV. If the token is ever
- * replaced with D1 scope, see migrations/0001_accounts.sql for the D1 schema.
- *
- * Layout:
- *   acct:{id}   -> account row JSON (snake_case, secrets AES-GCM encrypted)
- *   acct:index  -> number[] of account ids, insertion order
- *   acct:seq    -> next account id
- *   site:{b64}  -> cached SiteInfo JSON, expirationTtl 86400 (24h)
- *
- * Plaintext never touches KV for: password, access_token, session.
+ * Plaintext never touches D1 for: password, access_token, session.
  * api_user is not a secret (it is the account's own id on the site).
  */
 
@@ -61,7 +51,7 @@ export function accountPublic(a: Account): Record<string, unknown> {
 }
 
 export interface Env {
-  KV: KVNamespace;
+  DB: D1Database;
   ADMIN_TOKEN?: string;
   ENCRYPTION_KEY: string;
   CHECKIN_TZ?: string;
@@ -69,7 +59,6 @@ export interface Env {
 
 const now = (): string => new Date().toISOString();
 
-/** Stored row: snake_case, secret columns hold AES-GCM ciphertext. */
 interface AccountRow {
   id: number;
   name: string;
@@ -92,30 +81,6 @@ interface AccountRow {
   failures: number;
   created_at: string;
   updated_at: string;
-}
-
-const rowKey = (id: number): string => `acct:${id}`;
-const INDEX_KEY = 'acct:index';
-const SEQ_KEY = 'acct:seq';
-
-async function readRow(env: Env, id: number): Promise<AccountRow | null> {
-  const raw = await env.KV.get(rowKey(id));
-  return raw ? (JSON.parse(raw) as AccountRow) : null;
-}
-
-async function writeRow(env: Env, row: AccountRow): Promise<void> {
-  await env.KV.put(rowKey(row.id), JSON.stringify(row));
-}
-
-async function readIndex(env: Env): Promise<number[]> {
-  const raw = await env.KV.get(INDEX_KEY);
-  if (!raw) return [];
-  try {
-    const ids = JSON.parse(raw) as unknown;
-    return Array.isArray(ids) ? (ids as number[]) : [];
-  } catch {
-    return [];
-  }
 }
 
 async function rowToAccount(env: Env, row: AccountRow): Promise<Account> {
@@ -160,66 +125,58 @@ export interface AccountInput {
   enabled?: boolean;
 }
 
-function uniqueErr(): Error {
-  return Object.assign(new Error('这个网站下已经有同名账号了，换个名称'), { status: 409 });
-}
-
 export async function listAccounts(env: Env): Promise<Account[]> {
-  const ids = await readIndex(env);
-  const out: Account[] = [];
-  for (const id of ids) {
-    const row = await readRow(env, id);
-    if (row) out.push(await rowToAccount(env, row));
-  }
-  return out;
+  const { results } = await env.DB.prepare('SELECT * FROM accounts ORDER BY id').all<AccountRow>();
+  return Promise.all((results ?? []).map((r) => rowToAccount(env, r)));
 }
 
 export async function listEnabled(env: Env): Promise<Account[]> {
-  return (await listAccounts(env)).filter((a) => a.enabled && a.baseUrl);
+  const { results } = await env.DB.prepare(
+    "SELECT * FROM accounts WHERE enabled = 1 AND base_url != '' ORDER BY id",
+  ).all<AccountRow>();
+  return Promise.all((results ?? []).map((r) => rowToAccount(env, r)));
 }
 
 export async function getAccount(env: Env, id: number): Promise<Account | null> {
-  const row = await readRow(env, id);
+  const row = await env.DB.prepare('SELECT * FROM accounts WHERE id = ?').bind(id).first<AccountRow>();
   return row ? rowToAccount(env, row) : null;
 }
 
 export async function createAccount(env: Env, input: AccountInput): Promise<Account> {
-  const baseUrl = input.baseUrl.replace(/\/+$/, '');
-  const existing = await listAccounts(env);
-  if (existing.some((a) => a.name === input.name && a.baseUrl === baseUrl)) throw uniqueErr();
-
-  const seqRaw = await env.KV.get(SEQ_KEY);
-  const id = (seqRaw ? parseInt(seqRaw, 10) : 0) + 1;
   const ts = now();
-  const row: AccountRow = {
-    id,
-    name: input.name,
-    base_url: baseUrl,
-    login_method: input.loginMethod ?? 'password',
-    username: input.username ?? null,
-    password: await maybeEncrypt(env.ENCRYPTION_KEY, input.password),
-    access_token: await maybeEncrypt(env.ENCRYPTION_KEY, input.accessToken),
-    session: await maybeEncrypt(env.ENCRYPTION_KEY, input.session),
-    api_user: input.apiUser ?? null,
-    checkin_after: input.checkinAfter ?? null,
-    avatar_color: input.avatarColor ?? null,
-    avatar_shape: input.avatarShape ?? null,
-    enabled: input.enabled === false ? 0 : 1,
-    last_run_at: null,
-    last_success: null,
-    last_checked_in: null,
-    last_quota: null,
-    last_error: null,
-    failures: 0,
-    created_at: ts,
-    updated_at: ts,
-  };
-  await writeRow(env, row);
-  await env.KV.put(SEQ_KEY, String(id));
-  await env.KV.put(INDEX_KEY, JSON.stringify([...(await readIndex(env)), id]));
-  const created = await getAccount(env, id);
-  if (!created) throw new Error('account created but could not be read back');
-  return created;
+  try {
+    const res = await env.DB.prepare(
+      `INSERT INTO accounts
+        (name, base_url, login_method, username, password, access_token, session,
+         api_user, checkin_after, avatar_color, avatar_shape, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        input.name,
+        input.baseUrl.replace(/\/+$/, ''),
+        input.loginMethod ?? 'password',
+        input.username ?? null,
+        await maybeEncrypt(env.ENCRYPTION_KEY, input.password),
+        await maybeEncrypt(env.ENCRYPTION_KEY, input.accessToken),
+        await maybeEncrypt(env.ENCRYPTION_KEY, input.session),
+        input.apiUser ?? null,
+        input.checkinAfter ?? null,
+        input.avatarColor ?? null,
+        input.avatarShape ?? null,
+        input.enabled === false ? 0 : 1,
+        ts,
+        ts,
+      )
+      .run();
+    const created = await getAccount(env, Number(res.meta.last_row_id));
+    if (!created) throw new Error('account created but could not be read back');
+    return created;
+  } catch (e) {
+    if (String((e as Error).message).includes('UNIQUE')) {
+      throw Object.assign(new Error('这个网站下已经有同名账号了，换个名称'), { status: 409 });
+    }
+    throw e;
+  }
 }
 
 export async function updateAccount(
@@ -227,38 +184,58 @@ export async function updateAccount(
   id: number,
   fields: Partial<Omit<AccountInput, 'name' | 'baseUrl'>> & { name?: string; baseUrl?: string },
 ): Promise<Account | null> {
-  const row = await readRow(env, id);
-  if (!row) return null;
-
-  const nextName = fields.name ?? row.name;
-  const nextBase = (fields.baseUrl ?? row.base_url).replace(/\/+$/, '');
-  const others = await listAccounts(env);
-  if (others.some((a) => a.id !== id && a.name === nextName && a.baseUrl === nextBase)) throw uniqueErr();
-
-  row.name = nextName;
-  row.base_url = nextBase;
-  if (fields.loginMethod !== undefined) row.login_method = fields.loginMethod;
-  if (fields.username !== undefined) row.username = fields.username;
-  if (fields.apiUser !== undefined) row.api_user = fields.apiUser;
-  if (fields.checkinAfter !== undefined) row.checkin_after = fields.checkinAfter;
-  if (fields.avatarColor !== undefined) row.avatar_color = fields.avatarColor;
-  if (fields.avatarShape !== undefined) row.avatar_shape = fields.avatarShape;
-  if (fields.password !== undefined) row.password = await maybeEncrypt(env.ENCRYPTION_KEY, fields.password || null);
-  if (fields.accessToken !== undefined)
-    row.access_token = await maybeEncrypt(env.ENCRYPTION_KEY, fields.accessToken || null);
-  if (fields.session !== undefined) row.session = await maybeEncrypt(env.ENCRYPTION_KEY, fields.session || null);
-  if (fields.enabled !== undefined) row.enabled = fields.enabled ? 1 : 0;
-  row.updated_at = now();
-  await writeRow(env, row);
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  const map: Record<string, string> = {
+    name: 'name',
+    baseUrl: 'base_url',
+    loginMethod: 'login_method',
+    username: 'username',
+    apiUser: 'api_user',
+    checkinAfter: 'checkin_after',
+    avatarColor: 'avatar_color',
+    avatarShape: 'avatar_shape',
+  };
+  for (const [k, col] of Object.entries(map)) {
+    const v = (fields as Record<string, unknown>)[k];
+    if (v !== undefined) {
+      sets.push(`${col} = ?`);
+      values.push(k === 'baseUrl' ? String(v).replace(/\/+$/, '') : (v as string | null));
+    }
+  }
+  if (fields.password !== undefined) {
+    sets.push('password = ?');
+    values.push(await maybeEncrypt(env.ENCRYPTION_KEY, fields.password || null));
+  }
+  if (fields.accessToken !== undefined) {
+    sets.push('access_token = ?');
+    values.push(await maybeEncrypt(env.ENCRYPTION_KEY, fields.accessToken || null));
+  }
+  if (fields.session !== undefined) {
+    sets.push('session = ?');
+    values.push(await maybeEncrypt(env.ENCRYPTION_KEY, fields.session || null));
+  }
+  if (fields.enabled !== undefined) {
+    sets.push('enabled = ?');
+    values.push(fields.enabled ? 1 : 0);
+  }
+  if (!sets.length) return getAccount(env, id);
+  sets.push('updated_at = ?');
+  values.push(now(), id);
+  try {
+    await env.DB.prepare(`UPDATE accounts SET ${sets.join(', ')} WHERE id = ?`).bind(...values).run();
+  } catch (e) {
+    if (String((e as Error).message).includes('UNIQUE')) {
+      throw Object.assign(new Error('这个网站下已经有同名账号了，换个名称'), { status: 409 });
+    }
+    throw e;
+  }
   return getAccount(env, id);
 }
 
 export async function deleteAccount(env: Env, id: number): Promise<boolean> {
-  const row = await readRow(env, id);
-  if (!row) return false;
-  await env.KV.delete(rowKey(id));
-  await env.KV.put(INDEX_KEY, JSON.stringify((await readIndex(env)).filter((i) => i !== id)));
-  return true;
+  const res = await env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(id).run();
+  return (res.meta.changes ?? 0) > 0;
 }
 
 export interface RunResult {
@@ -273,17 +250,28 @@ export interface RunResult {
  * blanking the balance because one reading failed is worse than a stale number.
  */
 export async function recordResult(env: Env, id: number, r: RunResult): Promise<void> {
-  const row = await readRow(env, id);
-  if (!row) return;
-  const ts = now();
-  row.last_success = r.success ? 1 : 0;
-  row.last_checked_in = r.checkedIn === null ? null : r.checkedIn ? 1 : 0;
-  if (r.quota !== null) row.last_quota = r.quota;
-  row.last_error = r.error;
-  row.last_run_at = ts;
-  row.updated_at = ts;
-  row.failures = r.success ? 0 : row.failures + 1;
-  await writeRow(env, row);
+  await env.DB.prepare(
+    `UPDATE accounts SET
+       last_success = ?,
+       last_checked_in = ?,
+       last_quota = COALESCE(?, last_quota),
+       last_error = ?,
+       last_run_at = ?,
+       updated_at = ?,
+       failures = CASE WHEN ? THEN 0 ELSE failures + 1 END
+     WHERE id = ?`,
+  )
+    .bind(
+      r.success ? 1 : 0,
+      r.checkedIn === null ? null : r.checkedIn ? 1 : 0,
+      r.quota,
+      r.error,
+      now(),
+      now(),
+      r.success ? 1 : 0,
+      id,
+    )
+    .run();
 }
 
 /** Persist rotated credentials an Outcome carries back (session / access_token / api_user / username). */
@@ -292,51 +280,54 @@ export async function persistRotated(
   id: number,
   o: { session?: string | null; accessToken?: string | null; apiUser?: string | null; username?: string | null },
 ): Promise<void> {
-  const row = await readRow(env, id);
-  if (!row) return;
-  let touched = false;
+  const sets: string[] = [];
+  const values: unknown[] = [];
   if (o.session !== undefined && o.session !== null) {
-    row.session = await maybeEncrypt(env.ENCRYPTION_KEY, o.session);
-    touched = true;
+    sets.push('session = ?');
+    values.push(await maybeEncrypt(env.ENCRYPTION_KEY, o.session));
   }
   if (o.accessToken !== undefined && o.accessToken !== null) {
-    row.access_token = await maybeEncrypt(env.ENCRYPTION_KEY, o.accessToken);
-    touched = true;
+    sets.push('access_token = ?');
+    values.push(await maybeEncrypt(env.ENCRYPTION_KEY, o.accessToken));
   }
   if (o.apiUser !== undefined && o.apiUser !== null) {
-    row.api_user = o.apiUser;
-    touched = true;
+    sets.push('api_user = ?');
+    values.push(o.apiUser);
   }
   if (o.username !== undefined && o.username !== null) {
-    row.username = o.username;
-    touched = true;
+    sets.push('username = ?');
+    values.push(o.username);
   }
-  if (!touched) return;
-  row.updated_at = now();
-  await writeRow(env, row);
+  if (!sets.length) return;
+  sets.push('updated_at = ?');
+  values.push(now(), id);
+  await env.DB.prepare(`UPDATE accounts SET ${sets.join(', ')} WHERE id = ?`).bind(...values).run();
 }
 
 // ---------------------------------------------------------------------------
-// Site-info probe cache (24h TTL via KV expiration)
+// Site-info probe cache (24h TTL)
 // ---------------------------------------------------------------------------
 
-const SITE_TTL_S = 24 * 3600;
-
-function siteKey(baseUrl: string): string {
-  const b64 = btoa(baseUrl).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  return `site:${b64}`;
-}
+const SITE_TTL_MS = 24 * 3600 * 1000;
 
 export async function getCachedSite(env: Env, baseUrl: string): Promise<SiteInfo | null> {
-  const raw = await env.KV.get(siteKey(baseUrl));
-  if (!raw) return null;
+  const row = await env.DB.prepare('SELECT info_json, probed_at FROM site_info WHERE base_url = ?')
+    .bind(baseUrl)
+    .first<{ info_json: string; probed_at: string }>();
+  if (!row) return null;
+  if (Date.now() - new Date(row.probed_at).getTime() > SITE_TTL_MS) return null;
   try {
-    return JSON.parse(raw) as SiteInfo;
+    return JSON.parse(row.info_json) as SiteInfo;
   } catch {
     return null;
   }
 }
 
 export async function setCachedSite(env: Env, site: SiteInfo): Promise<void> {
-  await env.KV.put(siteKey(site.baseUrl), JSON.stringify(site), { expirationTtl: SITE_TTL_S });
+  await env.DB.prepare(
+    `INSERT INTO site_info (base_url, info_json, probed_at) VALUES (?, ?, ?)
+     ON CONFLICT(base_url) DO UPDATE SET info_json = excluded.info_json, probed_at = excluded.probed_at`,
+  )
+    .bind(site.baseUrl, JSON.stringify(site), now())
+    .run();
 }

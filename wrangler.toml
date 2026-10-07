@@ -9,13 +9,10 @@ compatibility_flags = ["nodejs_compat"]
 # [assets]
 # directory = "../checkin-panel/frontend/dist"
 
-[[kv_namespaces]]
-binding = "KV"
-id = "7ab6e2c8d9394c219d51b3f06ceebffc" # checkin_kv (created 2026-10-07)
-
-# NOTE: D1 was the original design (see migrations/0001_accounts.sql), but the
-# stored Cloudflare API token has no D1 scope, so storage is KV. If the token
-# is ever replaced with D1 scope, switch back to [[d1_databases]].
+[[d1_databases]]
+binding = "DB"
+database_name = "checkin_db"
+database_id = "720f9195-8c8c-4f64-ab6b-eef2f4220083" # created 2026-10-07
 
 [triggers]
 crons = ["*/15 * * * *"] # sweep every 15 min; per-account checkin_after window decides who runs
