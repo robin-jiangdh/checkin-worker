@@ -1,0 +1,29 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "checkin-worker"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Serve the built React frontend (optional): build the original frontend and
+# point `directory` at its dist output. Omit the whole block for API-only.
+# [assets]
+# directory = "../checkin-panel/frontend/dist"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "7ab6e2c8d9394c219d51b3f06ceebffc" # checkin_kv (created 2026-10-07)
+
+# NOTE: D1 was the original design (see migrations/0001_accounts.sql), but the
+# stored Cloudflare API token has no D1 scope, so storage is KV. If the token
+# is ever replaced with D1 scope, switch back to [[d1_databases]].
+
+[triggers]
+crons = ["*/15 * * * *"] # sweep every 15 min; per-account checkin_after window decides who runs
+
+[vars]
+CHECKIN_TZ = "Asia/Shanghai" # the timezone checkin_after HH:MM is interpreted in
+
+# Secrets (set with `wrangler secret put`):
+#   ADMIN_TOKEN    — bearer token required on /api/* (unset = no auth, dev only)
+#   ENCRYPTION_KEY — base64 of 32 random bytes; encrypts password/access_token/session at rest
+#                    generate: openssl rand -base64 32
