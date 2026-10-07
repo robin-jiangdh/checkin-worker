@@ -55,6 +55,17 @@ npm run deploy
 3. **不回显凭据**：账号列表/详情接口不再返回密码和 session，只返回 `has_*` 标记。
    前端编辑页原来会把存量凭据回填进表单——对接时注意，留空 = 不改。
 
+## Web UI
+
+访问 `https://checkin-worker.me3442.workers.dev/` 即打开管理页面（单文件 `public/index.html`，
+打包时嵌进 Worker，`GET /` 直接 served）：
+
+- **登录页**：输入 `ADMIN_TOKEN` 即可（存在浏览器 localStorage，点「退出」清除）；
+- **列表页**：账号卡片（名称、站点、登录方式、今日状态、余额、上次运行、报错），
+  每行可手动「签到」/「删除」；顶部有「全部签到」「添加账号」；
+- **添加账号**：带「🔍 检测站点」（调 `/api/probe` 显示签到机制与登录方式），
+  支持 password / access_token / session 三种，session 粘贴各种形状都行。
+
 ## 定时签到
 
 cron 每 15 分钟跑一次 `sweep()`：
