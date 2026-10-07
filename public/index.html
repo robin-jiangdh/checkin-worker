@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>签到面板</title>
+<style>
+  :root { --bg:#101014; --card:#181820; --card2:#1f1f2a; --line:#2a2a38; --fg:#e8e8ee; --dim:#9a9ab0; --accent:#4f8cff; --green:#34c77b; --red:#e5534b; --amber:#d9a13b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  a { color:var(--accent); }
+  .wrap { max-width:960px; margin:0 auto; padding:24px 16px 64px; }
+
+  /* login */
+  .login-box { max-width:380px; margin:18vh auto 0; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:32px 28px; }
+  .login-box h1 { margin:0 0 6px; font-size:20px; }
+  .login-box p { margin:0 0 20px; color:var(--dim); font-size:13px; }
+
+  /* header */
+  header.top { display:flex; align-items:center; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+  header.top h1 { margin:0; font-size:20px; flex:1; }
+  .btn { background:var(--card2); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 14px; cursor:pointer; font-size:13px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btn.danger { color:var(--red); }
+  .btn:disabled { opacity:.5; cursor:default; }
+
+  input, select, textarea { width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 12px; font-size:14px; margin:4px 0 12px; }
+  textarea { min-height:84px; font-family:monospace; font-size:12px; resize:vertical; }
+  label { font-size:13px; color:var(--dim); display:block; margin-top:4px; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+
+  /* cards */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:12px; }
+  .card .head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .card .name { font-size:16px; font-weight:600; }
+  .card .url { color:var(--dim); font-size:12px; word-break:break-all; }
+  .card .meta { display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; font-size:13px; color:var(--dim); }
+  .card .meta b { color:var(--fg); font-weight:500; }
+  .card .err { margin-top:8px; font-size:12px; color:var(--red); word-break:break-all; }
+  .card .actions { margin-top:12px; display:flex; gap:8px; }
+  .tag { font-size:11px; background:var(--card2); border:1px solid var(--line); border-radius:6px; padding:2px 8px; color:var(--dim); }
+  .chip { font-size:12px; border-radius:20px; padding:2px 10px; }
+  .chip.gray { background:#2a2a38; color:var(--dim); }
+  .chip.green { background:rgba(52,199,123,.15); color:var(--green); border:1px solid rgba(52,199,123,.4); }
+  .chip.red { background:rgba(229,83,75,.12); color:var(--red); border:1px solid rgba(229,83,75,.4); }
+  .chip.amber { background:rgba(217,161,59,.12); color:var(--amber); border:1px solid rgba(217,161,59,.4); }
+  .empty { text-align:center; color:var(--dim); padding:60px 0; }
+
+  /* modal */
+  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:flex-start; justify-content:center; padding:40px 16px; overflow:auto; z-index:10; }
+  .modal { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:24px; width:100%; max-width:520px; }
+  .modal h2 { margin:0 0 16px; font-size:17px; }
+  .modal .foot { display:flex; gap:8px; justify-content:flex-end; margin-top:8px; }
+  .probe-hint { font-size:12px; color:var(--dim); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:12px; }
+
+  #msg { margin-bottom:12px; font-size:13px; }
+  #msg.ok { color:var(--green); } #msg.err { color:var(--red); } #msg.warn { color:var(--amber); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+
+<!-- 登录页 -->
+<div class="wrap" id="login-view" hidden>
+  <div class="login-box">
+    <h1>🔐 签到面板</h1>
+    <p>输入 ADMIN_TOKEN 登录（部署时生成的 bearer token）</p>
+    <input id="token-input" type="password" placeholder="ADMIN_TOKEN" autocomplete="off">
+    <button class="btn primary" id="login-btn" style="width:100%">登录</button>
+    <p id="login-err" style="color:var(--red); margin:12px 0 0"></p>
+  </div>
+</div>
+
+<!-- 列表页 -->
+<div class="wrap" id="app-view" hidden>
+  <header class="top">
+    <h1>📋 签到面板</h1>
+    <button class="btn" id="checkin-all-btn">全部签到</button>
+    <button class="btn primary" id="add-btn">＋ 添加账号</button>
+    <button class="btn" id="logout-btn">退出</button>
+  </header>
+  <div id="msg"></div>
+  <div id="list"></div>
+</div>
+
+<!-- 添加账号 -->
+<div class="modal-bg" id="modal" hidden>
+  <div class="modal">
+    <h2>添加账号</h2>
+    <label>名称 *</label>
+    <input id="f-name" placeholder="例如：agentrouter 主号">
+    <label>站点地址 *</label>
+    <input id="f-url" placeholder="https://example.com">
+    <button class="btn" id="probe-btn" type="button" style="margin-bottom:12px">🔍 检测站点</button>
+    <div class="probe-hint" id="probe-hint" hidden></div>
+    <div class="row2">
+      <div><label>登录方式</label>
+        <select id="f-method">
+          <option value="password">密码</option>
+          <option value="access_token">访问令牌</option>
+          <option value="session">会话 Cookie</option>
+        </select></div>
+      <div><label>每日开放时间（可选）</label><input id="f-after" placeholder="HH:MM，如 08:30"></div>
+    </div>
+    <div id="cred-password">
+      <div class="row2">
+        <div><label>用户名</label><input id="f-username" autocomplete="off"></div>
+        <div><label>密码</label><input id="f-password" type="password" autocomplete="new-password"></div>
+      </div>
+    </div>
+    <div id="cred-token" hidden>
+      <label>访问令牌（站点用户页 → 访问令牌 → 生成）</label>
+      <input id="f-accesstoken" autocomplete="off">
+    </div>
+    <div id="cred-session" hidden>
+      <label>会话 Cookie（粘贴 session 值或整段导出的 JSON）</label>
+      <textarea id="f-session"></textarea>
+    </div>
+    <label>API User（可选，站点要求 New-Api-User 头时填）</label>
+    <input id="f-apiuser" autocomplete="off">
+    <div class="foot">
+      <button class="btn" id="modal-cancel">取消</button>
+      <button class="btn primary" id="modal-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const getToken = () => localStorage.getItem('checkin_admin_token') || '';
+const METHOD_LABEL = { password: '密码', access_token: '访问令牌', session: '会话Cookie' };
+
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken(), ...(opts.headers || {}) },
+  });
+  if (res.status === 401) { showLogin('登录已失效，请重新输入 ADMIN_TOKEN'); throw new Error('unauthorized'); }
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
+  if (!res.ok) throw new Error((body && body.detail) || text || ('HTTP ' + res.status));
+  return body;
+}
+
+function showLogin(msg) {
+  $('#app-view').hidden = true; $('#login-view').hidden = false;
+  if (msg) $('#login-err').textContent = msg;
+}
+function showApp() { $('#login-view').hidden = true; $('#app-view').hidden = false; }
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }); }
+  catch { return iso; }
+}
+
+function statusChip(a) {
+  if (a.lastSuccess === null || a.lastSuccess === undefined) return '<span class="chip gray">未运行</span>';
+  if (a.lastSuccess) return a.lastCheckedIn === false
+    ? '<span class="chip amber">成功（今日已领过）</span>'
+    : '<span class="chip green">✓ 已签到</span>';
+  return '<span class="chip red">✗ 失败</span>';
+}
+
+function msg(text, kind) {
+  const el = $('#msg'); el.textContent = text; el.className = kind || '';
+  if (text) setTimeout(() => { el.textContent = ''; el.className = ''; }, 6000);
+}
+
+async function loadList() {
+  const accounts = await api('/accounts');
+  const box = $('#list');
+  if (!accounts.length) { box.innerHTML = '<div class="empty">还没有账号，点右上「添加账号」开始吧</div>'; return; }
+  box.innerHTML = accounts.map((a) => `
+    <div class="card" data-id="${a.id}">
+      <div class="head">
+        <span class="name">${esc(a.name)}</span>
+        ${statusChip(a)}
+        <span class="tag">${esc(METHOD_LABEL[a.loginMethod] || a.loginMethod)}</span>
+        ${a.enabled ? '' : '<span class="tag">已停用</span>'}
+      </div>
+      <div class="url">${esc(a.baseUrl)}</div>
+      <div class="meta">
+        <span>余额 <b>${a.lastQuota === null || a.lastQuota === undefined ? '—' : '$' + a.lastQuota}</b></span>
+        <span>上次运行 <b>${esc(fmtTime(a.lastRunAt))}</b></span>
+        ${a.checkinAfter ? `<span>开放时间 <b>${esc(a.checkinAfter)}</b></span>` : ''}
+        ${a.failures ? `<span>连续失败 <b style="color:var(--red)">${a.failures}</b></span>` : ''}
+      </div>
+      ${a.lastError ? `<div class="err">${esc(a.lastError)}</div>` : ''}
+      <div class="actions">
+        <button class="btn" data-act="checkin">签到</button>
+        <button class="btn danger" data-act="del">删除</button>
+      </div>
+    </div>`).join('');
+  box.querySelectorAll('.card').forEach((card) => {
+    const id = card.dataset.id;
+    card.querySelector('[data-act="checkin"]').onclick = async (e) => {
+      const btn = e.target; btn.disabled = true; btn.textContent = '签到中…';
+      try {
+        const o = await api(`/accounts/${id}/check-in`, { method: 'POST' });
+        msg(o.success ? `✓ ${o.gain !== null && o.gain !== undefined ? '本次 +$' + o.gain : '签到成功'}` : '✗ ' + (o.error || '失败'), o.success ? 'ok' : 'err');
+      } catch (err) { msg('✗ ' + err.message, 'err'); }
+      btn.disabled = false; btn.textContent = '签到';
+      loadList();
+    };
+    card.querySelector('[data-act="del"]').onclick = async () => {
+      if (!confirm('确定删除这个账号吗？')) return;
+      try { await api(`/accounts/${id}`, { method: 'DELETE' }); msg('已删除', 'ok'); loadList(); }
+      catch (err) { msg('✗ ' + err.message, 'err'); }
+    };
+  });
+}
+
+// ---- 登录 ----
+$('#login-btn').onclick = doLogin;
+$('#token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+async function doLogin() {
+  const t = $('#token-input').value.trim();
+  if (!t) { $('#login-err').textContent = '请输入 ADMIN_TOKEN'; return; }
+  localStorage.setItem('checkin_admin_token', t);
+  try {
+    const h = await api('/health');
+    if (h && h.ok) { $('#login-err').textContent = ''; $('#token-input').value = ''; showApp(); loadList(); }
+    else showLogin('验证失败');
+  } catch (err) {
+    if (String(err.message) !== 'unauthorized') $('#login-err').textContent = 'Token 无效：' + err.message;
+  }
+}
+$('#logout-btn').onclick = () => { localStorage.removeItem('checkin_admin_token'); showLogin(); };
+
+// ---- 添加账号 ----
+const modal = $('#modal');
+$('#add-btn').onclick = () => { modal.hidden = false; $('#probe-hint').hidden = true; };
+$('#modal-cancel').onclick = () => { modal.hidden = true; };
+modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+$('#f-method').onchange = (e) => {
+  const m = e.target.value;
+  $('#cred-password').hidden = m !== 'password';
+  $('#cred-token').hidden = m !== 'access_token';
+  $('#cred-session').hidden = m !== 'session';
+};
+$('#probe-btn').onclick = async () => {
+  const url = $('#f-url').value.trim();
+  if (!url) { msg('先填站点地址', 'warn'); return; }
+  const hint = $('#probe-hint'); hint.hidden = false; hint.textContent = '检测中…';
+  try {
+    const info = await api('/probe', { method: 'POST', body: JSON.stringify({ base_url: url }) });
+    const methods = (info.loginMethods || []).map((m) => METHOD_LABEL[m] || m).join('、') || '未知（可能被 WAF 拦截）';
+    hint.innerHTML = `签到机制：<b>${esc(info.mechanism === 'endpoint' ? '签到接口' : '重新登录领额度')}</b><br>登录方式：${esc(methods)}${info.turnstile ? '<br>⚠️ 该站点开启了 Turnstile，Worker 版无法签到' : ''}`;
+  } catch (err) { hint.textContent = '检测失败：' + err.message; }
+};
+$('#modal-save').onclick = async () => {
+  const body = {
+    name: $('#f-name').value.trim(),
+    base_url: $('#f-url').value.trim(),
+    login_method: $('#f-method').value,
+    username: $('#f-username').value.trim() || null,
+    password: $('#f-password').value || null,
+    access_token: $('#f-accesstoken').value.trim() || null,
+    session: $('#f-session').value.trim() || null,
+    api_user: $('#f-apiuser').value.trim() || null,
+    checkin_after: $('#f-after').value.trim() || null,
+  };
+  if (!body.name || !body.base_url) { msg('名称和站点地址必填', 'warn'); return; }
+  try {
+    const saved = await api('/accounts', { method: 'POST', body: JSON.stringify(body) });
+    modal.hidden = true;
+    ['f-name','f-url','f-username','f-password','f-accesstoken','f-session','f-apiuser','f-after'].forEach((id) => { $('#' + id).value = ''; });
+    if (saved.credential && saved.credential.warning) msg('⚠️ 账号已保存，但凭据验证：' + saved.credential.warning, 'warn');
+    else msg('✓ 账号已添加', 'ok');
+    loadList();
+  } catch (err) { msg('✗ ' + err.message, 'err'); }
+};
+
+// ---- 全部签到 ----
+$('#checkin-all-btn').onclick = async () => {
+  const accounts = await api('/accounts').catch((err) => { msg('✗ ' + err.message, 'err'); return null; });
+  if (!accounts) return;
+  const ids = accounts.filter((a) => a.enabled).map((a) => a.id);
+  if (!ids.length) { msg('没有启用的账号', 'warn'); return; }
+  msg('批量签到中…', '');
+  try {
+    const results = await api('/check-in', { method: 'POST', body: JSON.stringify({ account_ids: ids }) });
+    const ok = Object.values(results).filter((r) => r.success).length;
+    msg(`批量完成：${ok}/${ids.length} 成功`, ok === ids.length ? 'ok' : 'warn');
+    loadList();
+  } catch (err) { msg('✗ ' + err.message, 'err'); }
+};
+
+// ---- 启动 ----
+(async () => {
+  if (!getToken()) { showLogin(); return; }
+  try { const h = await api('/health'); if (h && h.ok) { showApp(); loadList(); } else showLogin(); }
+  catch { showLogin(); }
+})();
+</script>
+</body>
+</html>

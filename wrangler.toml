@@ -4,10 +4,9 @@ main = "src/index.ts"
 compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Serve the built React frontend (optional): build the original frontend and
-# point `directory` at its dist output. Omit the whole block for API-only.
-# [assets]
-# directory = "../checkin-panel/frontend/dist"
+# Frontend is embedded into the Worker bundle (public/index.html via
+# esbuild --loader:.html=text, served at GET /) — no [assets] needed, which
+# also keeps the pure-API deploy script working.
 
 [[d1_databases]]
 binding = "DB"

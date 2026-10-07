@@ -10,6 +10,7 @@
  */
 
 import { Hono } from 'hono';
+import indexHtml from '../public/index.html';
 import {
   bootstrapPassword,
   credentialsFromPaste,
@@ -150,6 +151,16 @@ async function withCredentialCheck(
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Web UI: single-file app embedded at build time (esbuild --loader:.html=text).
+// Public — auth lives on /api/* via ADMIN_TOKEN, the page itself just asks for it.
+// ---------------------------------------------------------------------------
+app.get('/', (c) =>
+  c.html(indexHtml, 200, {
+    'Cache-Control': 'no-store',
+  }),
+);
+
 app.get('/api/health', (c) => c.json({ ok: true, mode: 'api-only' }));
 
 app.get('/api/accounts', async (c) => {
